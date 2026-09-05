@@ -1,0 +1,14 @@
+{
+  "name": "ds-garage-scraper",
+  "version": "1.0.0",
+  "description": "Scraper do Mercado Livre para a DS Garage",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "axios": "^1.7.9",
+    "cheerio": "^1.0.0"
+  }
+}
