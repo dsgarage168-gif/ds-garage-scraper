@@ -8,9 +8,6 @@ const PORT = process.env.PORT || 10000;
 
 app.use(express.json());
 
-const ML_API_URL =
-  "https://api.mercadolivre.com";
-
 const ML_BASE_URL =
   "https://www.mercadolivre.com.br";
 
@@ -56,7 +53,7 @@ function credenciaisConfiguradas() {
 }
 
 /* =========================================================
-   HEADERS DA SESSÃO DE AFILIADO
+   HEADERS DA SESSÃO DO AFILIADO
 ========================================================= */
 
 function headersSessao() {
@@ -91,25 +88,66 @@ function headersSessao() {
 }
 
 /* =========================================================
-   BUSCAR ITEM REAL NO MERCADO LIVRE
+   TRANSFORMAR ITEM ID EM PADRÕES DE BUSCA
 ========================================================= */
 
-async function buscarItemMercadoLivre(itemId) {
-  const url =
-    `${ML_API_URL}/items/${encodeURIComponent(itemId)}`;
+function numeroDoItem(itemId) {
+  return String(itemId || "")
+    .replace(/^MLB-/i, "")
+    .replace(/^MLB/i, "")
+    .trim();
+}
+
+function urlItemPadrao(itemId) {
+  const numero =
+    numeroDoItem(itemId);
+
+  return `https://www.mercadolivre.com.br/MLB-${numero}`;
+}
+
+/* =========================================================
+   BUSCAR URL REAL DO ITEM PELO SITE
+========================================================= */
+
+async function buscarUrlRealPeloSite(itemId) {
+
+  const numero =
+    numeroDoItem(itemId);
+
+  if (!numero) {
+    throw new Error(
+      "Item ID inválido."
+    );
+  }
+
+  /*
+    Primeiro tentamos a URL curta/padrão do item.
+
+    O Mercado Livre normalmente redireciona
+    para a URL canônica da publicação.
+  */
+
+  const urlInicial =
+    urlItemPadrao(itemId);
 
   const response =
     await axios.get(
-      url,
+      urlInicial,
       {
         timeout: 20000,
 
+        maxRedirects: 10,
+
         headers: {
-          Accept:
-            "application/json",
 
           "User-Agent":
-            "Mozilla/5.0"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36",
+
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+
+          "Accept-Language":
+            "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
         },
 
         validateStatus:
@@ -117,57 +155,208 @@ async function buscarItemMercadoLivre(itemId) {
       }
     );
 
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(
-      `Mercado Livre /items HTTP ${response.status}: ${JSON.stringify(response.data)}`
-    );
-  }
-
-  return response.data;
-}
-
-/* =========================================================
-   PEGAR URL REAL DA PUBLICAÇÃO
-========================================================= */
-
-async function obterUrlRealProduto(itemId) {
-
-  const item =
-    await buscarItemMercadoLivre(itemId);
+  const html =
+    typeof response.data === "string"
+      ? response.data
+      : "";
 
   /*
-    O permalink é a URL real da publicação.
+    URL final depois dos redirects.
   */
 
-  if (
-    item &&
-    typeof item.permalink === "string" &&
-    item.permalink.trim()
-  ) {
+  const urlFinal =
+    response.request?.res?.responseUrl ||
+    response.request?.responseURL ||
+    null;
+
+  /*
+    Procuramos também canonical,
+    og:url e outras referências dentro
+    do HTML.
+  */
+
+  const $ =
+    cheerio.load(html);
+
+  const canonical =
+    $('link[rel="canonical"]')
+      .attr("href") ||
+    null;
+
+  const ogUrl =
+    $('meta[property="og:url"]')
+      .attr("content") ||
+    null;
+
+  /*
+    Escolhemos a melhor URL disponível.
+  */
+
+  const candidatos = [
+
+    canonical,
+
+    ogUrl,
+
+    urlFinal
+  ];
+
+  for (const candidato of candidatos) {
+
+    if (
+      typeof candidato !== "string" ||
+      !candidato.trim()
+    ) {
+      continue;
+    }
+
+    const url =
+      candidato.trim();
+
+    /*
+      Precisamos garantir que seja
+      uma URL do Mercado Livre.
+    */
+
+    if (
+      !url.includes(
+        "mercadolivre.com.br"
+      )
+    ) {
+      continue;
+    }
+
+    /*
+      Evitamos URLs de login,
+      captcha ou páginas de erro.
+    */
+
+    const bloqueadas = [
+
+      "/login",
+
+      "/captcha",
+
+      "/gz/account-verification",
+
+      "/error"
+    ];
+
+    const urlLower =
+      url.toLowerCase();
+
+    if (
+      bloqueadas.some(
+        parte =>
+          urlLower.includes(parte)
+      )
+    ) {
+      continue;
+    }
+
     return {
       sucesso: true,
-      url: item.permalink.trim(),
-      item
+
+      url,
+
+      url_inicial:
+        urlInicial,
+
+      url_final:
+        urlFinal,
+
+      canonical,
+
+      og_url:
+        ogUrl,
+
+      http_status:
+        response.status
     };
   }
 
   /*
-    Alguns retornos podem trazer o link em outros campos.
+    Se não encontramos uma URL real,
+    tentamos localizar a publicação pelo
+    próprio HTML procurando pelo ID.
   */
 
-  if (
-    item &&
-    typeof item.permalink === "string"
-  ) {
-    return {
-      sucesso: true,
-      url: item.permalink,
-      item
-    };
+  const regexUrls = [
+    /https:\/\/www\.mercadolivre\.com\.br\/[^"'\\\s<>]+/gi,
+    /https:\/\/produto\.mercadolivre\.com\.br\/[^"'\\\s<>]+/gi
+  ];
+
+  for (const regex of regexUrls) {
+
+    const encontrados =
+      html.match(regex) || [];
+
+    for (const encontrada of encontrados) {
+
+      const limpa =
+        encontrada
+          .replace(/&amp;/g, "&")
+          .replace(/\\u002F/g, "/")
+          .replace(/\\\//g, "/");
+
+      if (
+        !limpa.includes(
+          "mercadolivre.com.br"
+        )
+      ) {
+        continue;
+      }
+
+      const lower =
+        limpa.toLowerCase();
+
+      if (
+        lower.includes("/login") ||
+        lower.includes("/captcha") ||
+        lower.includes("/gz/")
+      ) {
+        continue;
+      }
+
+      /*
+        Só aceitamos uma URL que tenha
+        alguma referência ao item ou
+        pareça ser uma publicação.
+      */
+
+      if (
+        limpa.includes(numero) ||
+        limpa.includes("/p/") ||
+        limpa.includes("/MLB-")
+      ) {
+        return {
+          sucesso: true,
+
+          url: limpa,
+
+          url_inicial:
+            urlInicial,
+
+          url_final:
+            urlFinal,
+
+          canonical,
+
+          og_url:
+            ogUrl,
+
+          http_status:
+            response.status,
+
+          encontrada_no_html:
+            true
+        };
+      }
+    }
   }
 
   throw new Error(
-    "O Mercado Livre não retornou o permalink real desta publicação."
+    `Não foi possível encontrar a URL real da publicação. HTTP ${response.status}.`
   );
 }
 
@@ -177,7 +366,7 @@ async function obterUrlRealProduto(itemId) {
 
 app.get("/", (req, res) => {
 
-  resposta(res, {
+  return resposta(res, {
 
     status:
       "online",
@@ -186,16 +375,21 @@ app.get("/", (req, res) => {
       "DS Garage Scraper",
 
     versao:
-      "2.3",
+      "2.4",
 
     mensagem:
       "Servidor funcionando!",
 
     endpoints: [
+
       "/",
+
       "/buscar",
+
       "/status-afiliado",
+
       "/validar-afiliado",
+
       "/teste-afiliado"
     ]
   });
@@ -220,9 +414,11 @@ app.get("/buscar", async (req, res) => {
       await axios.get(
         url,
         {
-          timeout: 20000,
+          timeout:
+            20000,
 
-          maxRedirects: 5,
+          maxRedirects:
+            5,
 
           headers: {
 
@@ -288,17 +484,19 @@ app.get("/buscar", async (req, res) => {
           if (titulo) {
 
             produtos.push({
+
               titulo,
+
               preco:
                 preco || null,
+
               link:
                 link || null,
+
               imagem:
                 imagem || null
             });
-
           }
-
         }
       );
 
@@ -350,7 +548,7 @@ app.get("/buscar", async (req, res) => {
 });
 
 /* =========================================================
-   STATUS
+   STATUS AFILIADO
 ========================================================= */
 
 app.get(
@@ -387,7 +585,7 @@ app.get(
 );
 
 /* =========================================================
-   VALIDAR SESSÃO DO AFILIADO
+   VALIDAR AFILIADO
 ========================================================= */
 
 app.get(
@@ -742,15 +940,15 @@ app.get(
     }
 
     /* =====================================================
-       PEGAR URL REAL DO ITEM
+       DESCOBRIR URL REAL
     ===================================================== */
 
-    let produto;
+    let dadosUrl;
 
     try {
 
-      produto =
-        await obterUrlRealProduto(
+      dadosUrl =
+        await buscarUrlRealPeloSite(
           itemId
         );
 
@@ -764,7 +962,7 @@ app.get(
             false,
 
           etapa:
-            "buscar_item",
+            "buscar_url_real",
 
           item_id:
             itemId,
@@ -777,10 +975,10 @@ app.get(
     }
 
     const originUrl =
-      produto.url;
+      dadosUrl.url;
 
     /* =====================================================
-       PAYLOAD CREATE LINK
+       CREATE LINK
     ===================================================== */
 
     const payload = {
@@ -803,13 +1001,6 @@ app.get(
         "true",
 
       urls: [
-
-        /*
-          IMPORTANTE:
-
-          Agora usamos o permalink REAL
-          retornado pelo Mercado Livre.
-        */
 
         originUrl
       ]
@@ -837,13 +1028,6 @@ app.get(
           }
         );
 
-      /*
-        Não devolvemos:
-        - cookie
-        - CSRF
-        - tag
-      */
-
       return resposta(
         res,
         {
@@ -861,6 +1045,25 @@ app.get(
           origin_url:
             originUrl,
 
+          descoberta_url:
+            {
+
+              url_inicial:
+                dadosUrl.url_inicial,
+
+              url_final:
+                dadosUrl.url_final,
+
+              canonical:
+                dadosUrl.canonical,
+
+              og_url:
+                dadosUrl.og_url,
+
+              http_status:
+                dadosUrl.http_status
+            },
+
           resposta:
             response.data
         },
@@ -875,6 +1078,9 @@ app.get(
 
           sucesso:
             false,
+
+          etapa:
+            "create_link",
 
           http_status:
             error.response?.status ||
