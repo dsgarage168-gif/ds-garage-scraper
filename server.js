@@ -1,112 +1,134 @@
 const express = require("express");
 const axios = require("axios");
-const cheerio = require("cheerio");
 
 const app = express();
 
+app.use(express.json({ limit: "1mb" }));
+
 const PORT = process.env.PORT || 10000;
 
-app.use(express.json());
-
-const ML_BASE_URL =
-  "https://www.mercadolivre.com.br";
-
-const ML_AFFILIATE_URL =
+const AFFILIATE_ENDPOINT =
   "https://www.mercadolivre.com.br/affiliate-program/api/v2/affiliates/createLink";
 
-/* =========================================================
-   AUXILIARES
-========================================================= */
-
-function resposta(res, dados, status = 200) {
+function resposta(res, status, dados) {
   return res.status(status).json(dados);
 }
 
-function limparItemId(itemId) {
-  return String(itemId || "").trim();
-}
-
-function credenciaisConfiguradas() {
-  const cookie =
-    process.env.ML_AFFILIATE_COOKIE || "";
-
-  const csrf =
-    process.env.ML_AFFILIATE_CSRF || "";
-
-  const tag =
-    process.env.ML_AFFILIATE_TAG || "";
-
+function obterCredenciais() {
   return {
-    cookie: cookie.trim(),
-    csrf: csrf.trim(),
-    tag: tag.trim(),
-
-    cookieConfigurado:
-      cookie.trim().length > 0,
-
-    csrfConfigurado:
-      csrf.trim().length > 0,
-
-    tagConfigurada:
-      tag.trim().length > 0
+    cookie: String(process.env.ML_AFFILIATE_COOKIE || "").trim(),
+    csrf: String(process.env.ML_AFFILIATE_CSRF || "").trim(),
+    tag: String(process.env.ML_AFFILIATE_TAG || "").trim()
   };
 }
 
-/* =========================================================
-   HEADERS
-========================================================= */
-
-function headersSessao() {
-  const credenciais =
-    credenciaisConfiguradas();
+function validarConfiguracao() {
+  const credenciais = obterCredenciais();
 
   return {
-    Accept:
-      "application/json, text/plain, */*",
-
-    "Accept-Language":
-      "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-
-    "Content-Type":
-      "application/json",
-
-    Origin:
-      "https://www.mercadolivre.com.br",
-
-    Referer:
-      "https://www.mercadolivre.com.br/afiliados/hub?is_affiliate=true",
-
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36",
-
-    "x-csrf-token":
-      credenciais.csrf,
-
-    Cookie:
-      credenciais.cookie
+    ok:
+      credenciais.cookie.length > 0 &&
+      credenciais.csrf.length > 0 &&
+      credenciais.tag.length > 0,
+    cookie_configurado: credenciais.cookie.length > 0,
+    csrf_configurado: credenciais.csrf.length > 0,
+    tag_configurada: credenciais.tag.length > 0
   };
 }
 
-/* =========================================================
-   HOME
-========================================================= */
+function limparOriginUrl(url) {
+  if (!url) return null;
+
+  let valor = String(url).trim();
+
+  // Remove protocolo
+  valor = valor.replace(/^https?:\/\//i, "");
+
+  // Remove parâmetros e fragmentos.
+  // O createLink funciona melhor com a URL limpa da página.
+  valor = valor.split("?")[0];
+  valor = valor.split("#")[0];
+
+  // Remove barra final
+  valor = valor.replace(/\/+$/, "");
+
+  // Garante domínio Mercado Livre
+  if (!/^www\.mercadolivre\.com\.br\//i.test(valor)) {
+    return null;
+  }
+
+  return valor;
+}
+
+function extrairOriginDoItem(itemId, urlRecebida) {
+  if (urlRecebida) {
+    return limparOriginUrl(urlRecebida);
+  }
+
+  /*
+   * Não tentamos inventar a URL do produto.
+   *
+   * O Mercado Livre exige a URL real/canônica do produto
+   * no campo "urls" do createLink.
+   */
+  return null;
+}
+
+async function criarLinkAfiliado({
+  itemId,
+  originUrl,
+  credenciais
+}) {
+  const payload = {
+    itemId: itemId,
+    itemAddToList: itemId,
+    tag: credenciais.tag,
+    type: "product",
+    buyBoxWinner: itemId,
+    extraCommission: "true",
+    urls: [originUrl]
+  };
+
+  const response = await axios.post(
+    AFFILIATE_ENDPOINT,
+    payload,
+    {
+      timeout: 30000,
+      validateStatus: () => true,
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        Origin: "https://www.mercadolivre.com.br",
+        Referer:
+          "https://www.mercadolivre.com.br/afiliados/hub?is_affiliate=true",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36",
+        "X-CSRF-Token": credenciais.csrf,
+        Cookie: credenciais.cookie
+      },
+      data: payload
+    }
+  );
+
+  return {
+    http_status: response.status,
+    payload_enviado: payload,
+    resposta: response.data
+  };
+}
+
+/*
+|--------------------------------------------------------------------------
+| HOME
+|--------------------------------------------------------------------------
+*/
 
 app.get("/", (req, res) => {
-
-  return resposta(res, {
-
-    status:
-      "online",
-
-    projeto:
-      "DS Garage Scraper",
-
-    versao:
-      "2.5",
-
-    mensagem:
-      "Servidor funcionando!",
-
+  return resposta(res, 200, {
+    sucesso: true,
+    servidor: "online",
+    projeto: "DS Garage - Mercado Livre Afiliados",
+    versao: "2.6",
     endpoints: [
       "/",
       "/buscar",
@@ -117,617 +139,295 @@ app.get("/", (req, res) => {
   });
 });
 
-/* =========================================================
-   SCRAPER ANTIGO
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| BUSCAR
+|--------------------------------------------------------------------------
+|
+| Endpoint simples para conferir se o servidor está online.
+|
+*/
 
-app.get("/buscar", async (req, res) => {
+app.get("/buscar", (req, res) => {
+  return resposta(res, 200, {
+    sucesso: true,
+    servidor: "online",
+    mensagem: "Servidor DS Garage funcionando."
+  });
+});
 
-  const keyword =
-    req.query.keyword ||
-    "automotivo";
+/*
+|--------------------------------------------------------------------------
+| STATUS DAS CREDENCIAIS
+|--------------------------------------------------------------------------
+|
+| Nunca mostramos os valores das credenciais.
+|
+*/
 
-  const url =
-    `https://lista.mercadolivre.com.br/${encodeURIComponent(keyword)}`;
+app.get("/status-afiliado", (req, res) => {
+  const config = validarConfiguracao();
+
+  return resposta(res, 200, {
+    sucesso: true,
+    servidor: "online",
+    configuracao: config,
+    observacao: "Nenhum valor de credencial é exibido."
+  });
+});
+
+/*
+|--------------------------------------------------------------------------
+| VALIDAR SESSÃO DO AFILIADO
+|--------------------------------------------------------------------------
+*/
+
+app.get("/validar-afiliado", async (req, res) => {
+  const credenciais = obterCredenciais();
+
+  if (!credenciais.cookie) {
+    return resposta(res, 400, {
+      sucesso: false,
+      etapa: "configuracao",
+      autenticado: false,
+      erro: "ML_AFFILIATE_COOKIE ainda não está configurado no Render.",
+      cookie_configurado: false,
+      csrf_configurado: credenciais.csrf.length > 0
+    });
+  }
+
+  if (!credenciais.csrf) {
+    return resposta(res, 400, {
+      sucesso: false,
+      etapa: "configuracao",
+      autenticado: false,
+      erro: "ML_AFFILIATE_CSRF ainda não está configurado no Render.",
+      cookie_configurado: true,
+      csrf_configurado: false
+    });
+  }
 
   try {
-
-    const response =
-      await axios.get(
-        url,
-        {
-          timeout: 20000,
-          maxRedirects: 5,
-
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36",
-
-            Accept:
-              "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-
-            "Accept-Language":
-              "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
-          }
+    const response = await axios.get(
+      "https://www.mercadolivre.com.br/afiliados/hub?is_affiliate=true",
+      {
+        timeout: 30000,
+        maxRedirects: 10,
+        validateStatus: () => true,
+        headers: {
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36",
+          Referer: "https://www.mercadolivre.com.br/",
+          Cookie: credenciais.cookie
         }
-      );
+      }
+    );
 
-    const $ =
-      cheerio.load(response.data);
+    const html = String(response.data || "");
 
-    const produtos = [];
+    const encontrouPaginaAfiliados =
+      html.includes("/afiliados/") ||
+      html.toLowerCase().includes("afiliados");
 
-    $(".ui-search-result__wrapper")
-      .each((index, element) => {
+    const encontrouTelaLogin =
+      html.includes("Para continuar, acesse sua conta") ||
+      html.includes("login") && html.includes("account-verification");
 
-        if (produtos.length >= 10) {
-          return;
-        }
+    const sessaoAceita =
+      response.status >= 200 &&
+      response.status < 400 &&
+      !encontrouTelaLogin;
 
-        const titulo =
-          $(element)
-            .find(".poly-component__title")
-            .first()
-            .text()
-            .trim();
-
-        const preco =
-          $(element)
-            .find(".andes-money-amount__fraction")
-            .first()
-            .text()
-            .trim();
-
-        const link =
-          $(element)
-            .find("a")
-            .first()
-            .attr("href");
-
-        const imagem =
-          $(element)
-            .find("img")
-            .first()
-            .attr("src") ||
-          $(element)
-            .find("img")
-            .first()
-            .attr("data-src");
-
-        if (titulo) {
-
-          produtos.push({
-            titulo,
-            preco:
-              preco || null,
-            link:
-              link || null,
-            imagem:
-              imagem || null
-          });
-        }
-      });
-
-    return resposta(res, {
-
-      sucesso:
-        true,
-
-      keyword,
-
-      status_http:
-        response.status,
-
+    return resposta(res, 200, {
+      sucesso: true,
+      autenticado: sessaoAceita,
+      http_status: response.status,
       url_final:
         response.request?.res?.responseUrl ||
-        url,
-
-      quantidade:
-        produtos.length,
-
-      produtos
-    });
-
-  } catch (error) {
-
-    return resposta(
-      res,
-      {
-
-        sucesso:
-          false,
-
-        keyword,
-
-        erro:
-          error.message,
-
-        status_http:
-          error.response?.status ||
-          null,
-
-        url_final:
-          error.response?.request?.res?.responseUrl ||
-          null
+        "https://www.mercadolivre.com.br/afiliados/hub?is_affiliate=true",
+      diagnostico: {
+        encontrou_pagina_afiliados: encontrouPaginaAfiliados,
+        encontrou_tela_login: encontrouTelaLogin,
+        sessao_aceita: sessaoAceita
       },
-      500
-    );
+      observacao: sessaoAceita
+        ? "O Mercado Livre aceitou a sessão enviada pelo Render."
+        : "O Mercado Livre não confirmou a sessão enviada pelo Render."
+    });
+  } catch (error) {
+    return resposta(res, 500, {
+      sucesso: false,
+      etapa: "validar_sessao",
+      autenticado: false,
+      erro: error.message
+    });
   }
 });
 
-/* =========================================================
-   STATUS AFILIADO
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| TESTE DE CREATE LINK
+|--------------------------------------------------------------------------
+|
+| Agora a URL do produto NÃO é fixa.
+|
+| Exemplo:
+|
+| /teste-afiliado?item_id=MLB3506502529&origin_url=https://www.mercadolivre.com.br/slug-do-produto/p/MLB23445212
+|
+| Também aceitamos "url" no lugar de "origin_url".
+|
+*/
 
-app.get(
-  "/status-afiliado",
-  (req, res) => {
+app.get("/teste-afiliado", async (req, res) => {
+  const itemId = String(req.query.item_id || "").trim();
 
-    const credenciais =
-      credenciaisConfiguradas();
+  const urlRecebida = String(
+    req.query.origin_url ||
+    req.query.url ||
+    ""
+  ).trim();
 
-    return resposta(res, {
-
-      sucesso:
-        true,
-
-      servidor:
-        "online",
-
-      configuracao: {
-
-        cookie_configurado:
-          credenciais.cookieConfigurado,
-
-        csrf_configurado:
-          credenciais.csrfConfigurado,
-
-        tag_configurada:
-          credenciais.tagConfigurada
-      },
-
-      observacao:
-        "Nenhum valor de credencial é exibido."
+  if (!itemId) {
+    return resposta(res, 400, {
+      sucesso: false,
+      erro: "Informe ?item_id=MLB..."
     });
   }
-);
 
-/* =========================================================
-   VALIDAR AFILIADO
-========================================================= */
+  const credenciais = obterCredenciais();
 
-app.get(
-  "/validar-afiliado",
-  async (req, res) => {
-
-    const credenciais =
-      credenciaisConfiguradas();
-
-    if (!credenciais.cookieConfigurado) {
-
-      return resposta(
-        res,
-        {
-          sucesso: false,
-          etapa: "configuracao",
-          autenticado: false,
-
-          erro:
-            "ML_AFFILIATE_COOKIE ainda não está configurado no Render.",
-
-          cookie_configurado: false,
-
-          csrf_configurado:
-            credenciais.csrfConfigurado,
-
-          tag_configurada:
-            credenciais.tagConfigurada
-        },
-        400
-      );
-    }
-
-    if (!credenciais.csrfConfigurado) {
-
-      return resposta(
-        res,
-        {
-          sucesso: false,
-          etapa: "configuracao",
-          autenticado: false,
-
-          erro:
-            "ML_AFFILIATE_CSRF ainda não está configurado no Render.",
-
-          cookie_configurado: true,
-
-          csrf_configurado: false,
-
-          tag_configurada:
-            credenciais.tagConfigurada
-        },
-        400
-      );
-    }
-
-    try {
-
-      const response =
-        await axios.get(
-          `${ML_BASE_URL}/afiliados/hub?is_affiliate=true`,
-          {
-            timeout: 20000,
-            maxRedirects: 5,
-
-            headers:
-              headersSessao(),
-
-            validateStatus:
-              () => true
-          }
-        );
-
-      const status =
-        response.status;
-
-      const urlFinal =
-        response.request?.res?.responseUrl ||
-        null;
-
-      const html =
-        typeof response.data === "string"
-          ? response.data
-          : "";
-
-      const $ =
-        cheerio.load(html);
-
-      const texto =
-        $("body")
-          .text()
-          .replace(/\s+/g, " ")
-          .trim();
-
-      const sinaisLogin = [
-        "Para continuar, acesse sua conta",
-        "Já tenho conta",
-        "Sou novo"
-      ];
-
-      const sinaisAfiliado = [
-        "Compartilhe para ganhar dinheiro",
-        "Afiliados",
-        "Comissão",
-        "Ganhos"
-      ];
-
-      const encontrouLogin =
-        sinaisLogin.some(
-          sinal =>
-            texto
-              .toLowerCase()
-              .includes(
-                sinal.toLowerCase()
-              )
-        );
-
-      const encontrouAfiliado =
-        sinaisAfiliado.some(
-          sinal =>
-            texto
-              .toLowerCase()
-              .includes(
-                sinal.toLowerCase()
-              )
-        );
-
-      const autenticado =
-        status >= 200 &&
-        status < 300 &&
-        !encontrouLogin &&
-        encontrouAfiliado;
-
-      return resposta(res, {
-
-        sucesso:
-          true,
-
-        autenticado,
-
-        http_status:
-          status,
-
-        url_final:
-          urlFinal,
-
-        diagnostico: {
-
-          encontrou_pagina_afiliados:
-            encontrouAfiliado,
-
-          encontrou_tela_login:
-            encontrouLogin,
-
-          sessao_aceita:
-            autenticado,
-
-          tag_configurada:
-            credenciais.tagConfigurada
-        },
-
-        observacao:
-          autenticado
-            ? "O Mercado Livre aceitou a sessão enviada pelo Render."
-            : "A sessão não foi reconhecida como autenticada na área de afiliados."
-      });
-
-    } catch (error) {
-
-      return resposta(
-        res,
-        {
-
-          sucesso: false,
-
-          autenticado: false,
-
-          etapa: "validacao",
-
-          erro:
-            error.message,
-
-          http_status:
-            error.response?.status ||
-            null
-        },
-        500
-      );
-    }
+  if (!credenciais.cookie) {
+    return resposta(res, 400, {
+      sucesso: false,
+      etapa: "configuracao",
+      autenticado: false,
+      erro: "ML_AFFILIATE_COOKIE ainda não está configurado no Render.",
+      cookie_configurado: false,
+      csrf_configurado: credenciais.csrf.length > 0,
+      tag_configurada: credenciais.tag.length > 0
+    });
   }
-);
 
-/* =========================================================
-   TESTE CREATE LINK
-========================================================= */
-
-app.get(
-  "/teste-afiliado",
-  async (req, res) => {
-
-    const itemId =
-      limparItemId(
-        req.query.item_id
-      );
-
-    if (!itemId) {
-
-      return resposta(
-        res,
-        {
-          sucesso: false,
-
-          erro:
-            "Informe ?item_id=MLB..."
-        },
-        400
-      );
-    }
-
-    const credenciais =
-      credenciaisConfiguradas();
-
-    /* =====================================================
-       CONFIGURAÇÕES
-    ===================================================== */
-
-    if (!credenciais.cookieConfigurado) {
-
-      return resposta(
-        res,
-        {
-          sucesso: false,
-          etapa: "configuracao",
-
-          erro:
-            "ML_AFFILIATE_COOKIE não configurado.",
-
-          cookie_configurado: false,
-
-          csrf_configurado:
-            credenciais.csrfConfigurado,
-
-          tag_configurada:
-            credenciais.tagConfigurada
-        },
-        400
-      );
-    }
-
-    if (!credenciais.csrfConfigurado) {
-
-      return resposta(
-        res,
-        {
-          sucesso: false,
-          etapa: "configuracao",
-
-          erro:
-            "ML_AFFILIATE_CSRF não configurado.",
-
-          cookie_configurado: true,
-
-          csrf_configurado: false,
-
-          tag_configurada:
-            credenciais.tagConfigurada
-        },
-        400
-      );
-    }
-
-    if (!credenciais.tagConfigurada) {
-
-      return resposta(
-        res,
-        {
-          sucesso: false,
-          etapa: "configuracao",
-
-          erro:
-            "ML_AFFILIATE_TAG não configurada no Render.",
-
-          cookie_configurado: true,
-
-          csrf_configurado: true,
-
-          tag_configurada: false
-        },
-        400
-      );
-    }
-
-    /* =====================================================
-       URL REAL DO PRODUTO
-    ===================================================== */
-
-    /*
-      IMPORTANTE:
-
-      O Mercado Livre não quer:
-
-      https://www.mercadolivre.com.br/MLB-4690712449
-
-      Ele quer a URL do produto de catálogo:
-
-      /compressor-portatil-.../p/MLB57468821
-
-      Vamos usar exatamente a estrutura que
-      apareceu na requisição createLink capturada
-      no navegador.
-    */
-
-    const originUrl =
-      "www.mercadolivre.com.br/compressor-portatil-car-air-pump-digital-com-visor-para-carro-moto-bike-calibrador-de-pneu-multifuncional/p/MLB57468821";
-
-    /* =====================================================
-       PAYLOAD
-    ===================================================== */
-
-    const payload = {
-
-      itemId:
-        itemId,
-
-      itemAddToList:
-        itemId,
-
-      tag:
-        credenciais.tag,
-
-      type:
-        "product",
-
-      buyBoxWinner:
-        itemId,
-
-      extraCommission:
-        "true",
-
-      urls: [
-        originUrl
-      ]
-    };
-
-    try {
-
-      const response =
-        await axios.post(
-          ML_AFFILIATE_URL,
-
-          payload,
-
-          {
-            timeout: 20000,
-
-            headers:
-              headersSessao(),
-
-            validateStatus:
-              () => true
-          }
-        );
-
-      return resposta(
-        res,
-        {
-
-          sucesso:
-            response.status >= 200 &&
-            response.status < 300,
-
-          http_status:
-            response.status,
-
-          item_id:
-            itemId,
-
-          origin_url:
-            originUrl,
-
-          resposta:
-            response.data
-        },
-        response.status
-      );
-
-    } catch (error) {
-
-      return resposta(
-        res,
-        {
-
-          sucesso:
-            false,
-
-          etapa:
-            "create_link",
-
-          http_status:
-            error.response?.status ||
-            null,
-
-          item_id:
-            itemId,
-
-          origin_url:
-            originUrl,
-
-          erro:
-            error.message,
-
-          resposta:
-            error.response?.data ||
-            null
-        },
-        error.response?.status ||
-        500
-      );
-    }
+  if (!credenciais.csrf) {
+    return resposta(res, 400, {
+      sucesso: false,
+      etapa: "configuracao",
+      autenticado: false,
+      erro: "ML_AFFILIATE_CSRF ainda não está configurado no Render.",
+      cookie_configurado: true,
+      csrf_configurado: false,
+      tag_configurada: credenciais.tag.length > 0
+    });
   }
-);
 
-/* =========================================================
-   START
-========================================================= */
-
-app.listen(
-  PORT,
-  "0.0.0.0",
-  () => {
-
-    console.log(
-      `DS Garage Scraper rodando na porta ${PORT}`
-    );
-
+  if (!credenciais.tag) {
+    return resposta(res, 400, {
+      sucesso: false,
+      etapa: "configuracao",
+      autenticado: false,
+      erro: "ML_AFFILIATE_TAG ainda não está configurado no Render.",
+      cookie_configurado: true,
+      csrf_configurado: true,
+      tag_configurada: false
+    });
   }
-);
+
+  if (!urlRecebida) {
+    return resposta(res, 400, {
+      sucesso: false,
+      etapa: "origin_url",
+      erro:
+        "Informe a URL real do produto em &origin_url=. A URL precisa ser a página /p/MLB... do produto.",
+      exemplo:
+        "/teste-afiliado?item_id=MLB3506502529&origin_url=https://www.mercadolivre.com.br/nome-do-produto/p/MLB23445212"
+    });
+  }
+
+  const originUrl = extrairOriginDoItem(
+    itemId,
+    urlRecebida
+  );
+
+  if (!originUrl) {
+    return resposta(res, 400, {
+      sucesso: false,
+      etapa: "origin_url",
+      erro:
+        "A origin_url não é válida. Use uma URL do Mercado Livre começando com www.mercadolivre.com.br/."
+    });
+  }
+
+  try {
+    const resultado = await criarLinkAfiliado({
+      itemId,
+      originUrl,
+      credenciais
+    });
+
+    return resposta(res, 200, {
+      sucesso:
+        resultado.resposta?.total_success > 0 ||
+        resultado.resposta?.urls?.some(
+          item => item?.created === true
+        ) === true,
+
+      http_status: resultado.http_status,
+
+      item_id: itemId,
+
+      origin_url: originUrl,
+
+      tag: credenciais.tag,
+
+      resposta: resultado.resposta
+    });
+  } catch (error) {
+    return resposta(res, 500, {
+      sucesso: false,
+      etapa: "createLink",
+      item_id: itemId,
+      origin_url: originUrl,
+      erro: error.message,
+      detalhes: error.response?.data || null,
+      http_status: error.response?.status || null
+    });
+  }
+});
+
+/*
+|--------------------------------------------------------------------------
+| TRATAMENTO DE ERROS
+|--------------------------------------------------------------------------
+*/
+
+app.use((req, res) => {
+  return resposta(res, 404, {
+    sucesso: false,
+    erro: "Endpoint não encontrado.",
+    rota: req.path
+  });
+});
+
+app.use((error, req, res, next) => {
+  console.error(error);
+
+  return resposta(res, 500, {
+    sucesso: false,
+    erro: error.message || "Erro interno do servidor."
+  });
+});
+
+/*
+|--------------------------------------------------------------------------
+| START
+|--------------------------------------------------------------------------
+*/
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(
+    `DS Garage afiliados rodando na porta ${PORT}`
+  );
+});
