@@ -8,7 +8,8 @@ const PORT = process.env.PORT || 10000;
 
 app.use(express.json());
 
-const ML_BASE_URL = "https://www.mercadolivre.com.br";
+const ML_BASE_URL =
+  "https://www.mercadolivre.com.br";
 
 const ML_AFFILIATE_URL =
   "https://www.mercadolivre.com.br/affiliate-program/api/v2/affiliates/createLink";
@@ -25,28 +26,29 @@ function limparItemId(itemId) {
   return String(itemId || "").trim();
 }
 
-function gerarTag() {
-  const agora = new Date();
-
-  const ano = agora.getUTCFullYear();
-  const mes = String(agora.getUTCMonth() + 1).padStart(2, "0");
-  const dia = String(agora.getUTCDate()).padStart(2, "0");
-  const hora = String(agora.getUTCHours()).padStart(2, "0");
-  const minuto = String(agora.getUTCMinutes()).padStart(2, "0");
-  const segundo = String(agora.getUTCSeconds()).padStart(2, "0");
-
-  return `dx${ano}${mes}${dia}${hora}${minuto}${segundo}`;
-}
-
 function credenciaisConfiguradas() {
-  const cookie = process.env.ML_AFFILIATE_COOKIE || "";
-  const csrf = process.env.ML_AFFILIATE_CSRF || "";
+  const cookie =
+    process.env.ML_AFFILIATE_COOKIE || "";
+
+  const csrf =
+    process.env.ML_AFFILIATE_CSRF || "";
+
+  const tag =
+    process.env.ML_AFFILIATE_TAG || "";
 
   return {
     cookie: cookie.trim(),
     csrf: csrf.trim(),
-    cookieConfigurado: cookie.trim().length > 0,
-    csrfConfigurado: csrf.trim().length > 0
+    tag: tag.trim(),
+
+    cookieConfigurado:
+      cookie.trim().length > 0,
+
+    csrfConfigurado:
+      csrf.trim().length > 0,
+
+    tagConfigurada:
+      tag.trim().length > 0
   };
 }
 
@@ -55,7 +57,8 @@ function credenciaisConfiguradas() {
 ========================================================= */
 
 function headersSessao() {
-  const credenciais = credenciaisConfiguradas();
+  const credenciais =
+    credenciaisConfiguradas();
 
   return {
     Accept:
@@ -92,8 +95,11 @@ app.get("/", (req, res) => {
   resposta(res, {
     status: "online",
     projeto: "DS Garage Scraper",
-    versao: "2.1",
-    mensagem: "Servidor funcionando!",
+    versao: "2.2",
+
+    mensagem:
+      "Servidor funcionando!",
+
     endpoints: [
       "/",
       "/buscar",
@@ -105,89 +111,125 @@ app.get("/", (req, res) => {
 });
 
 /* =========================================================
-   SCRAPER
+   SCRAPER ANTIGO
 ========================================================= */
 
 app.get("/buscar", async (req, res) => {
-  const keyword = req.query.keyword || "automotivo";
+
+  const keyword =
+    req.query.keyword || "automotivo";
 
   const url =
     `https://lista.mercadolivre.com.br/${encodeURIComponent(keyword)}`;
 
   try {
-    const response = await axios.get(url, {
-      timeout: 20000,
-      maxRedirects: 5,
 
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36",
+    const response = await axios.get(
+      url,
+      {
+        timeout: 20000,
+        maxRedirects: 5,
 
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36",
 
-        "Accept-Language":
-          "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+
+          "Accept-Language":
+            "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+        }
       }
-    });
+    );
 
-    const $ = cheerio.load(response.data);
+    const $ =
+      cheerio.load(response.data);
 
     const produtos = [];
 
-    $(".ui-search-result__wrapper").each((index, element) => {
-      if (produtos.length >= 10) return;
+    $(".ui-search-result__wrapper")
+      .each((index, element) => {
 
-      const titulo = $(element)
-        .find(".poly-component__title")
-        .first()
-        .text()
-        .trim();
+        if (produtos.length >= 10) {
+          return;
+        }
 
-      const preco = $(element)
-        .find(".andes-money-amount__fraction")
-        .first()
-        .text()
-        .trim();
+        const titulo =
+          $(element)
+            .find(".poly-component__title")
+            .first()
+            .text()
+            .trim();
 
-      const link = $(element)
-        .find("a")
-        .first()
-        .attr("href");
+        const preco =
+          $(element)
+            .find(".andes-money-amount__fraction")
+            .first()
+            .text()
+            .trim();
 
-      const imagem =
-        $(element).find("img").first().attr("src") ||
-        $(element).find("img").first().attr("data-src");
+        const link =
+          $(element)
+            .find("a")
+            .first()
+            .attr("href");
 
-      if (titulo) {
-        produtos.push({
-          titulo,
-          preco: preco || null,
-          link: link || null,
-          imagem: imagem || null
-        });
-      }
-    });
+        const imagem =
+          $(element)
+            .find("img")
+            .first()
+            .attr("src") ||
+          $(element)
+            .find("img")
+            .first()
+            .attr("data-src");
+
+        if (titulo) {
+
+          produtos.push({
+            titulo,
+            preco: preco || null,
+            link: link || null,
+            imagem: imagem || null
+          });
+
+        }
+
+      });
 
     return resposta(res, {
       sucesso: true,
       keyword,
-      status_http: response.status,
+
+      status_http:
+        response.status,
+
       url_final:
-        response.request?.res?.responseUrl || url,
-      quantidade: produtos.length,
+        response.request?.res?.responseUrl ||
+        url,
+
+      quantidade:
+        produtos.length,
+
       produtos
     });
 
   } catch (error) {
+
     return resposta(res, {
       sucesso: false,
       keyword,
-      erro: error.message,
+
+      erro:
+        error.message,
+
       status_http:
         error.response?.status || null,
+
       url_final:
-        error.response?.request?.res?.responseUrl || null
+        error.response?.request?.res?.responseUrl ||
+        null
     }, 500);
   }
 });
@@ -197,19 +239,27 @@ app.get("/buscar", async (req, res) => {
 ========================================================= */
 
 app.get("/status-afiliado", (req, res) => {
-  const credenciais = credenciaisConfiguradas();
+
+  const credenciais =
+    credenciaisConfiguradas();
 
   return resposta(res, {
+
     sucesso: true,
 
-    servidor: "online",
+    servidor:
+      "online",
 
     configuracao: {
+
       cookie_configurado:
         credenciais.cookieConfigurado,
 
       csrf_configurado:
-        credenciais.csrfConfigurado
+        credenciais.csrfConfigurado,
+
+      tag_configurada:
+        credenciais.tagConfigurada
     },
 
     observacao:
@@ -218,18 +268,19 @@ app.get("/status-afiliado", (req, res) => {
 });
 
 /* =========================================================
-   VALIDAR SESSÃO DO AFILIADO
+   VALIDAR SESSÃO
 ========================================================= */
 
 app.get("/validar-afiliado", async (req, res) => {
 
-  const credenciais = credenciaisConfiguradas();
+  const credenciais =
+    credenciaisConfiguradas();
 
   if (!credenciais.cookieConfigurado) {
+
     return resposta(res, {
       sucesso: false,
       etapa: "configuracao",
-
       autenticado: false,
 
       erro:
@@ -238,15 +289,18 @@ app.get("/validar-afiliado", async (req, res) => {
       cookie_configurado: false,
 
       csrf_configurado:
-        credenciais.csrfConfigurado
+        credenciais.csrfConfigurado,
+
+      tag_configurada:
+        credenciais.tagConfigurada
     }, 400);
   }
 
   if (!credenciais.csrfConfigurado) {
+
     return resposta(res, {
       sucesso: false,
       etapa: "configuracao",
-
       autenticado: false,
 
       erro:
@@ -254,47 +308,50 @@ app.get("/validar-afiliado", async (req, res) => {
 
       cookie_configurado: true,
 
-      csrf_configurado: false
+      csrf_configurado: false,
+
+      tag_configurada:
+        credenciais.tagConfigurada
     }, 400);
   }
 
   try {
 
-    /*
-      Fazemos uma requisição simples para a área
-      autenticada de afiliados.
+    const response =
+      await axios.get(
+        `${ML_BASE_URL}/afiliados/hub?is_affiliate=true`,
+        {
+          timeout: 20000,
+          maxRedirects: 5,
 
-      Não estamos gerando link ainda.
-      O objetivo aqui é descobrir se a sessão
-      enviada pelo Render é aceita pelo Mercado Livre.
-    */
+          headers:
+            headersSessao(),
 
-    const response = await axios.get(
-      `${ML_BASE_URL}/afiliados/hub?is_affiliate=true`,
-      {
-        timeout: 20000,
-        maxRedirects: 5,
+          validateStatus:
+            () => true
+        }
+      );
 
-        headers: headersSessao(),
-
-        validateStatus: () => true
-      }
-    );
-
-    const status = response.status;
+    const status =
+      response.status;
 
     const urlFinal =
-      response.request?.res?.responseUrl || null;
+      response.request?.res?.responseUrl ||
+      null;
 
     const html =
       typeof response.data === "string"
         ? response.data
         : "";
 
-    const $ = cheerio.load(html);
+    const $ =
+      cheerio.load(html);
 
     const texto =
-      $("body").text().replace(/\s+/g, " ").trim();
+      $("body")
+        .text()
+        .replace(/\s+/g, " ")
+        .trim();
 
     const sinaisLogin = [
       "Para continuar, acesse sua conta",
@@ -310,36 +367,45 @@ app.get("/validar-afiliado", async (req, res) => {
     ];
 
     const encontrouLogin =
-      sinaisLogin.some((sinal) =>
-        texto.toLowerCase().includes(sinal.toLowerCase())
+      sinaisLogin.some(
+        sinal =>
+          texto
+            .toLowerCase()
+            .includes(
+              sinal.toLowerCase()
+            )
       );
 
     const encontrouAfiliado =
-      sinaisAfiliado.some((sinal) =>
-        texto.toLowerCase().includes(sinal.toLowerCase())
+      sinaisAfiliado.some(
+        sinal =>
+          texto
+            .toLowerCase()
+            .includes(
+              sinal.toLowerCase()
+            )
       );
 
-    let autenticado = false;
-
-    if (
+    const autenticado =
       status >= 200 &&
       status < 300 &&
       !encontrouLogin &&
-      encontrouAfiliado
-    ) {
-      autenticado = true;
-    }
+      encontrouAfiliado;
 
     return resposta(res, {
+
       sucesso: true,
 
       autenticado,
 
-      http_status: status,
+      http_status:
+        status,
 
-      url_final: urlFinal,
+      url_final:
+        urlFinal,
 
       diagnostico: {
+
         encontrou_pagina_afiliados:
           encontrouAfiliado,
 
@@ -347,7 +413,10 @@ app.get("/validar-afiliado", async (req, res) => {
           encontrouLogin,
 
         sessao_aceita:
-          autenticado
+          autenticado,
+
+        tag_configurada:
+          credenciais.tagConfigurada
       },
 
       observacao:
@@ -359,33 +428,40 @@ app.get("/validar-afiliado", async (req, res) => {
   } catch (error) {
 
     return resposta(res, {
+
       sucesso: false,
 
       autenticado: false,
 
-      etapa: "validacao",
+      etapa:
+        "validacao",
 
       erro:
         error.message,
 
       http_status:
-        error.response?.status || null
+        error.response?.status ||
+        null
     }, 500);
   }
 });
 
 /* =========================================================
-   CREATE LINK
+   TESTE CREATE LINK
 ========================================================= */
 
 app.get("/teste-afiliado", async (req, res) => {
 
   const itemId =
-    limparItemId(req.query.item_id);
+    limparItemId(
+      req.query.item_id
+    );
 
   if (!itemId) {
+
     return resposta(res, {
       sucesso: false,
+
       erro:
         "Informe ?item_id=MLB..."
     }, 400);
@@ -395,9 +471,12 @@ app.get("/teste-afiliado", async (req, res) => {
     credenciaisConfiguradas();
 
   if (!credenciais.cookieConfigurado) {
+
     return resposta(res, {
       sucesso: false,
-      etapa: "configuracao",
+
+      etapa:
+        "configuracao",
 
       erro:
         "ML_AFFILIATE_COOKIE não configurado.",
@@ -405,25 +484,63 @@ app.get("/teste-afiliado", async (req, res) => {
       cookie_configurado: false,
 
       csrf_configurado:
-        credenciais.csrfConfigurado
+        credenciais.csrfConfigurado,
+
+      tag_configurada:
+        credenciais.tagConfigurada
     }, 400);
   }
 
   if (!credenciais.csrfConfigurado) {
+
     return resposta(res, {
       sucesso: false,
-      etapa: "configuracao",
+
+      etapa:
+        "configuracao",
 
       erro:
         "ML_AFFILIATE_CSRF não configurado.",
 
       cookie_configurado: true,
 
-      csrf_configurado: false
+      csrf_configurado: false,
+
+      tag_configurada:
+        credenciais.tagConfigurada
     }, 400);
   }
 
-  const tag = gerarTag();
+  if (!credenciais.tagConfigurada) {
+
+    return resposta(res, {
+      sucesso: false,
+
+      etapa:
+        "configuracao",
+
+      erro:
+        "ML_AFFILIATE_TAG não configurada no Render.",
+
+      cookie_configurado: true,
+
+      csrf_configurado: true,
+
+      tag_configurada: false
+    }, 400);
+  }
+
+  /*
+    IMPORTANTE:
+
+    Não geramos mais uma tag aleatória.
+
+    O Mercado Livre exige uma tag que esteja
+    associada ao afiliado autenticado.
+  */
+
+  const tag =
+    credenciais.tag;
 
   const numero =
     itemId
@@ -434,6 +551,7 @@ app.get("/teste-afiliado", async (req, res) => {
     `https://www.mercadolivre.com.br/MLB-${numero}`;
 
   const payload = {
+
     itemId,
 
     itemAddToList:
@@ -457,19 +575,27 @@ app.get("/teste-afiliado", async (req, res) => {
 
   try {
 
-    const response = await axios.post(
-      ML_AFFILIATE_URL,
-      payload,
-      {
-        timeout: 20000,
+    const response =
+      await axios.post(
+        ML_AFFILIATE_URL,
 
-        headers:
-          headersSessao(),
+        payload,
 
-        validateStatus:
-          () => true
-      }
-    );
+        {
+          timeout: 20000,
+
+          headers:
+            headersSessao(),
+
+          validateStatus:
+            () => true
+        }
+      );
+
+    /*
+      Nunca devolvemos a tag,
+      cookie ou CSRF na resposta.
+    */
 
     return resposta(res, {
 
@@ -483,11 +609,8 @@ app.get("/teste-afiliado", async (req, res) => {
       item_id:
         itemId,
 
-      tag,
-
       resposta:
         response.data
-
     }, response.status);
 
   } catch (error) {
@@ -497,19 +620,18 @@ app.get("/teste-afiliado", async (req, res) => {
       sucesso: false,
 
       http_status:
-        error.response?.status || null,
+        error.response?.status ||
+        null,
 
       item_id:
         itemId,
-
-      tag,
 
       erro:
         error.message,
 
       resposta:
-        error.response?.data || null
-
+        error.response?.data ||
+        null
     }, error.response?.status || 500);
   }
 });
@@ -518,8 +640,14 @@ app.get("/teste-afiliado", async (req, res) => {
    START
 ========================================================= */
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    `DS Garage Scraper rodando na porta ${PORT}`
-  );
-});
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+
+    console.log(
+      `DS Garage Scraper rodando na porta ${PORT}`
+    );
+
+  }
+);
