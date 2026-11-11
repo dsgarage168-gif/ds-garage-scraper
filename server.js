@@ -26,6 +26,14 @@ function resposta(res, status, dados) {
   return res.status(status).json(dados);
 }
 
+app.get("/health", (req, res) => {
+  return resposta(res, 200, {
+    ok: true,
+    status: "healthy",
+    uptime_seconds: Math.floor(process.uptime())
+  });
+});
+
 function obterCredenciais() {
   return {
     cookie: String(process.env.ML_AFFILIATE_COOKIE || "").trim(),
@@ -302,10 +310,10 @@ app.get("/teste-afiliado", async (req, res) => {
     ""
   ).trim();
 
-  if (!itemId) {
+  if (!/^MLB\d{6,}$/.test(itemId)) {
     return resposta(res, 400, {
       sucesso: false,
-      erro: "Informe ?item_id=MLB..."
+      erro: "item_id inválido. Informe um identificador MLB numérico válido."
     });
   }
 
