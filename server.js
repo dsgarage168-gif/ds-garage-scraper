@@ -94,6 +94,28 @@ function extrairOriginDoItem(itemId, urlRecebida) {
   return null;
 }
 
+let affiliateQueue = Promise.resolve();
+let lastAffiliateRequestAt = 0;
+const AFFILIATE_MIN_INTERVAL_MS = 1500;
+
+function aguardar(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function executarAfiliadoEmFila(fn) {
+  const execucao = affiliateQueue.then(async () => {
+    const espera = Math.max(
+      0,
+      AFFILIATE_MIN_INTERVAL_MS - (Date.now() - lastAffiliateRequestAt)
+    );
+    if (espera > 0) await aguardar(espera);
+    lastAffiliateRequestAt = Date.now();
+    return fn();
+  });
+  affiliateQueue = execucao.then(() => undefined, () => undefined);
+  return execucao;
+}
+
 async function criarLinkAfiliado({
   itemId,
   originUrl,
@@ -109,32 +131,38 @@ async function criarLinkAfiliado({
     urls: [originUrl]
   };
 
-  const response = await axios.post(
-    AFFILIATE_ENDPOINT,
-    payload,
-    {
-      timeout: 30000,
-      validateStatus: () => true,
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        Origin: "https://www.mercadolivre.com.br",
-        Referer:
-          "https://www.mercadolivre.com.br/afiliados/hub?is_affiliate=true",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36",
-        "X-CSRF-Token": credenciais.csrf,
-        Cookie: credenciais.cookie
-      },
-      data: payload
-    }
-  );
+  return executarAfiliadoEmFila(async () => {
+    const response = await axios.post(
+      AFFILIATE_ENDPOINT,
+      payload,
+      {
+        timeout: 30000,
+        validateStatus: () => true,
+        headers: {
+          Accept: "application/json, text/plain, */*",
+          "Content-Type": "application/json",
+          Origin: "https://www.mercadolivre.com.br",
+          Referer:
+            "https://www.mercadolivre.com.br/afiliados/hub?is_affiliate=true",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36",
+          "X-CSRF-Token": credenciais.csrf,
+          Cookie: credenciais.cookie
+        },
+        data: payload
+      }
+    );
 
-  return {
-    http_status: response.status,
-    payload_enviado: payload,
-    resposta: response.data
-  };
+    const retryHeader = Number(response.headers?.["retry-after"] || 0);
+    return {
+      http_status: response.status,
+      retry_after_seconds: Number.isFinite(retryHeader) && retryHeader > 0
+        ? Math.min(retryHeader, 120)
+        : null,
+      payload_enviado: payload,
+      resposta: response.data
+    };
+  });
 }
 
 /*
@@ -386,6 +414,30 @@ app.get("/teste-afiliado", async (req, res) => {
       originUrl,
       credenciais
     });
+
+    if (resultado.http_status === 429) {
+      const retryAfter = resultado.retry_after_seconds || 30;
+      res.set("Retry-After", String(retryAfter));
+      return resposta(res, 429, {
+        sucesso: false,
+        etapa: "createLink",
+        http_status: 429,
+        item_id: itemId,
+        erro: "O Mercado Livre limitou temporariamente a geração de links.",
+        retry_after_seconds: retryAfter
+      });
+    }
+
+    if (resultado.http_status >= 500) {
+      res.set("Retry-After", "15");
+      return resposta(res, 503, {
+        sucesso: false,
+        etapa: "createLink",
+        http_status: resultado.http_status,
+        item_id: itemId,
+        erro: "O serviço de afiliados do Mercado Livre está temporariamente indisponível."
+      });
+    }
 
     return resposta(res, 200, {
       sucesso:
