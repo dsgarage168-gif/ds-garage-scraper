@@ -5,6 +5,18 @@ const app = express();
 
 app.use(express.json({ limit: "1mb" }));
 
+// Diagnostico seguro de entrada e saida das requisicoes (sem registrar credenciais).
+app.use((req, res, next) => {
+  const inicio = Date.now();
+  console.log(`[ENTRADA] ${req.method} ${req.path}`);
+  res.on("finish", () => {
+    console.log(
+      `[SAÍDA] ${req.method} ${req.path} | HTTP ${res.statusCode} | ${Date.now() - inicio}ms`
+    );
+  });
+  next();
+});
+
 const PORT = process.env.PORT || 10000;
 
 const AFFILIATE_ENDPOINT =
